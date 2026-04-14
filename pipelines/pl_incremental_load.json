@@ -1,0 +1,99 @@
+{
+  "name": "pl_incremental_load",
+  "properties": {
+    "description": "Incremental load from source to Snowflake staging via watermark pattern",
+    "activities": [
+      {
+        "name": "LookupLastWatermark",
+        "type": "Lookup",
+        "dependsOn": [],
+        "policy": { "timeout": "00:05:00", "retry": 2, "retryIntervalInSeconds": 30 },
+        "typeProperties": {
+          "source": {
+            "type": "AzureSqlSource",
+            "sqlReaderQuery": "SELECT watermark_value FROM control.watermark_table WHERE table_name = '@{pipeline().parameters.source_table}'"
+          },
+          "dataset": { "referenceName": "ds_control_db", "type": "DatasetReference" }
+        }
+      },
+      {
+        "name": "LookupCurrentWatermark",
+        "type": "Lookup",
+        "dependsOn": [],
+        "policy": { "timeout": "00:05:00", "retry": 2, "retryIntervalInSeconds": 30 },
+        "typeProperties": {
+          "source": {
+            "type": "AzureSqlSource",
+            "sqlReaderQuery": "SELECT MAX(@{pipeline().parameters.watermark_column}) AS current_watermark FROM @{pipeline().parameters.source_table}"
+          },
+          "dataset": { "referenceName": "ds_source_db", "type": "DatasetReference" }
+        }
+      },
+      {
+        "name": "CopyIncrementalData",
+        "type": "Copy",
+        "dependsOn": [
+          { "activity": "LookupLastWatermark", "dependencyConditions": ["Succeeded"] },
+          { "activity": "LookupCurrentWatermark", "dependencyConditions": ["Succeeded"] }
+        ],
+        "policy": { "timeout": "01:00:00", "retry": 3, "retryIntervalInSeconds": 60 },
+        "typeProperties": {
+          "source": {
+            "type": "AzureSqlSource",
+            "sqlReaderQuery": "SELECT * FROM @{pipeline().parameters.source_table} WHERE @{pipeline().parameters.watermark_column} > '@{activity('LookupLastWatermark').output.firstRow.watermark_value}' AND @{pipeline().parameters.watermark_column} <= '@{activity('LookupCurrentWatermark').output.firstRow.current_watermark}'"
+          },
+          "sink": {
+            "type": "SnowflakeSink",
+            "importSettings": { "type": "SnowflakeImportCopyCommand" }
+          },
+          "enableStaging": true,
+          "stagingSettings": {
+            "linkedServiceName": { "referenceName": "ls_adls_staging", "type": "LinkedServiceReference" },
+            "path": "staging/incremental"
+          }
+        },
+        "inputs": [{ "referenceName": "ds_source_db", "type": "DatasetReference" }],
+        "outputs": [{ "referenceName": "ds_snowflake_staging", "type": "DatasetReference" }]
+      },
+      {
+        "name": "UpdateWatermark",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [
+          { "activity": "CopyIncrementalData", "dependencyConditions": ["Succeeded"] }
+        ],
+        "policy": { "timeout": "00:05:00", "retry": 2 },
+        "typeProperties": {
+          "storedProcedureName": "control.usp_update_watermark",
+          "storedProcedureParameters": {
+            "table_name": { "value": "@{pipeline().parameters.source_table}", "type": "String" },
+            "watermark_value": { "value": "@{activity('LookupCurrentWatermark').output.firstRow.current_watermark}", "type": "String" }
+          }
+        },
+        "linkedServiceName": { "referenceName": "ls_control_db", "type": "LinkedServiceReference" }
+      },
+      {
+        "name": "LogPipelineSuccess",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [
+          { "activity": "UpdateWatermark", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "storedProcedureName": "control.usp_log_pipeline_run",
+          "storedProcedureParameters": {
+            "pipeline_name": { "value": "@{pipeline().Pipeline}", "type": "String" },
+            "run_id": { "value": "@{pipeline().RunId}", "type": "String" },
+            "status": { "value": "Success", "type": "String" },
+            "rows_copied": { "value": "@{activity('CopyIncrementalData').output.rowsCopied}", "type": "Int32" },
+            "duration_seconds": { "value": "@{activity('CopyIncrementalData').output.copyDuration}", "type": "Int32" }
+          }
+        },
+        "linkedServiceName": { "referenceName": "ls_control_db", "type": "LinkedServiceReference" }
+      }
+    ],
+    "parameters": {
+      "source_table": { "type": "String" },
+      "watermark_column": { "type": "String", "defaultValue": "modified_date" }
+    },
+    "annotations": ["incremental", "production", "snowflake"]
+  }
+}

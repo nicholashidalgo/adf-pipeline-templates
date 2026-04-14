@@ -1,0 +1,26 @@
+{
+  "name": "tr_daily_0600_utc",
+  "properties": {
+    "type": "ScheduleTrigger",
+    "typeProperties": {
+      "recurrence": {
+        "frequency": "Day",
+        "interval": 1,
+        "startTime": "2025-01-01T06:00:00Z",
+        "timeZone": "UTC"
+      }
+    },
+    "pipelines": [
+      {
+        "pipelineReference": {
+          "referenceName": "pl_orchestrator_daily",
+          "type": "PipelineReference"
+        },
+        "parameters": {
+          "alert_webhook_url": "https://hooks.slack.com/services/PLACEHOLDER"
+        }
+      }
+    ],
+    "annotations": ["daily", "production"]
+  }
+}

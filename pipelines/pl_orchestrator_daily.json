@@ -1,0 +1,81 @@
+{
+  "name": "pl_orchestrator_daily",
+  "properties": {
+    "description": "Daily orchestrator pipeline with dependency management, error handling, and alerting",
+    "activities": [
+      {
+        "name": "GetPipelineConfig",
+        "type": "Lookup",
+        "dependsOn": [],
+        "policy": { "timeout": "00:05:00", "retry": 1 },
+        "typeProperties": {
+          "source": {
+            "type": "AzureSqlSource",
+            "sqlReaderQuery": "SELECT pipeline_name, source_table, watermark_column, priority, is_enabled FROM control.pipeline_config WHERE is_enabled = 1 ORDER BY priority"
+          },
+          "dataset": { "referenceName": "ds_control_db", "type": "DatasetReference" },
+          "firstRowOnly": false
+        }
+      },
+      {
+        "name": "ForEachPipeline",
+        "type": "ForEach",
+        "dependsOn": [
+          { "activity": "GetPipelineConfig", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "isSequential": false,
+          "batchCount": 4,
+          "items": { "value": "@activity('GetPipelineConfig').output.value", "type": "Expression" },
+          "activities": [
+            {
+              "name": "ExecuteIncrementalLoad",
+              "type": "ExecutePipeline",
+              "typeProperties": {
+                "pipeline": { "referenceName": "pl_incremental_load", "type": "PipelineReference" },
+                "parameters": {
+                  "source_table": "@{item().source_table}",
+                  "watermark_column": "@{item().watermark_column}"
+                },
+                "waitOnCompletion": true
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "RunDataQualityChecks",
+        "type": "ExecutePipeline",
+        "dependsOn": [
+          { "activity": "ForEachPipeline", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "pipeline": { "referenceName": "pl_data_quality_checks", "type": "PipelineReference" },
+          "waitOnCompletion": true
+        }
+      },
+      {
+        "name": "OnFailure_SendAlert",
+        "type": "WebActivity",
+        "dependsOn": [
+          { "activity": "ForEachPipeline", "dependencyConditions": ["Failed"] }
+        ],
+        "typeProperties": {
+          "url": "@{pipeline().parameters.alert_webhook_url}",
+          "method": "POST",
+          "body": {
+            "pipeline": "@{pipeline().Pipeline}",
+            "run_id": "@{pipeline().RunId}",
+            "status": "Failed",
+            "timestamp": "@{utcnow()}",
+            "message": "Daily orchestrator pipeline failed. Check ADF monitor for details."
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "alert_webhook_url": { "type": "String" }
+    },
+    "annotations": ["orchestrator", "production", "daily"]
+  }
+}

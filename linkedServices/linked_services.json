@@ -1,0 +1,55 @@
+{
+  "ls_source_db": {
+    "name": "ls_source_db",
+    "properties": {
+      "type": "AzureSqlDatabase",
+      "typeProperties": {
+        "connectionString": {
+          "type": "AzureKeyVaultSecret",
+          "store": { "referenceName": "ls_keyvault", "type": "LinkedServiceReference" },
+          "secretName": "source-db-connection-string"
+        }
+      },
+      "annotations": ["source", "azure-sql"]
+    }
+  },
+  "ls_snowflake": {
+    "name": "ls_snowflake",
+    "properties": {
+      "type": "Snowflake",
+      "typeProperties": {
+        "connectionString": {
+          "type": "AzureKeyVaultSecret",
+          "store": { "referenceName": "ls_keyvault", "type": "LinkedServiceReference" },
+          "secretName": "snowflake-connection-string"
+        }
+      },
+      "annotations": ["target", "snowflake"]
+    }
+  },
+  "ls_adls_staging": {
+    "name": "ls_adls_staging",
+    "properties": {
+      "type": "AzureBlobFS",
+      "typeProperties": {
+        "url": "https://<storage_account>.dfs.core.windows.net",
+        "accountKey": {
+          "type": "AzureKeyVaultSecret",
+          "store": { "referenceName": "ls_keyvault", "type": "LinkedServiceReference" },
+          "secretName": "adls-account-key"
+        }
+      },
+      "annotations": ["staging", "adls"]
+    }
+  },
+  "ls_keyvault": {
+    "name": "ls_keyvault",
+    "properties": {
+      "type": "AzureKeyVault",
+      "typeProperties": {
+        "baseUrl": "https://<keyvault_name>.vault.azure.net/"
+      },
+      "annotations": ["security"]
+    }
+  }
+}
