@@ -17,10 +17,14 @@
           "type": "PipelineReference"
         },
         "parameters": {
-          "alert_webhook_url": "https://hooks.slack.com/services/PLACEHOLDER"
+          "alert_webhook_url": "<alert_webhook_url>"
         }
       }
     ],
-    "annotations": ["daily", "production"]
+    "annotations": [
+      "daily",
+      "template",
+      "orchestration"
+    ]
   }
 }

@@ -1,18 +1,26 @@
 {
   "name": "pl_data_quality_checks",
   "properties": {
-    "description": "Post-load data quality validation with row count, null check, and freshness assertions",
+    "description": "Post-load data quality validation with operator-driven rule evaluation and centralized result logging",
     "activities": [
       {
         "name": "GetDQRules",
         "type": "Lookup",
         "dependsOn": [],
+        "policy": {
+          "timeout": "00:05:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 30
+        },
         "typeProperties": {
           "source": {
             "type": "AzureSqlSource",
-            "sqlReaderQuery": "SELECT rule_id, table_name, check_type, threshold, query FROM control.dq_rules WHERE is_active = 1"
+            "sqlReaderQuery": "SELECT rule_id, table_name, check_type, comparison_operator, threshold, query, severity FROM control.dq_rules WHERE is_active = 1 ORDER BY table_name, rule_id"
           },
-          "dataset": { "referenceName": "ds_control_db", "type": "DatasetReference" },
+          "dataset": {
+            "referenceName": "ds_control_db",
+            "type": "DatasetReference"
+          },
           "firstRowOnly": false
         }
       },
@@ -20,48 +28,156 @@
         "name": "ForEachRule",
         "type": "ForEach",
         "dependsOn": [
-          { "activity": "GetDQRules", "dependencyConditions": ["Succeeded"] }
+          {
+            "activity": "GetDQRules",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
         ],
         "typeProperties": {
           "isSequential": false,
           "batchCount": 8,
-          "items": { "value": "@activity('GetDQRules').output.value", "type": "Expression" },
+          "items": {
+            "value": "@activity('GetDQRules').output.value",
+            "type": "Expression"
+          },
           "activities": [
             {
               "name": "RunDQCheck",
               "type": "Lookup",
+              "dependsOn": [],
+              "policy": {
+                "timeout": "00:10:00",
+                "retry": 2,
+                "retryIntervalInSeconds": 30
+              },
               "typeProperties": {
                 "source": {
                   "type": "SnowflakeSource",
                   "query": "@{item().query}"
                 },
-                "dataset": { "referenceName": "ds_snowflake_staging", "type": "DatasetReference" }
+                "dataset": {
+                  "referenceName": "ds_snowflake_staging",
+                  "type": "DatasetReference"
+                },
+                "firstRowOnly": true
               }
             },
             {
               "name": "LogDQResult",
               "type": "SqlServerStoredProcedure",
               "dependsOn": [
-                { "activity": "RunDQCheck", "dependencyConditions": ["Completed"] }
+                {
+                  "activity": "RunDQCheck",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
               ],
               "typeProperties": {
-                "storedProcedureName": "control.usp_log_dq_result",
+                "storedProcedureName": "control.usp_evaluate_dq_result",
                 "storedProcedureParameters": {
-                  "rule_id": { "value": "@{item().rule_id}", "type": "Int32" },
-                  "table_name": { "value": "@{item().table_name}", "type": "String" },
-                  "check_type": { "value": "@{item().check_type}", "type": "String" },
-                  "result_value": { "value": "@{activity('RunDQCheck').output.firstRow.result}", "type": "String" },
-                  "threshold": { "value": "@{item().threshold}", "type": "String" },
-                  "passed": { "value": "@{if(greater(activity('RunDQCheck').output.firstRow.result, item().threshold), 'true', 'false')}", "type": "String" },
-                  "run_timestamp": { "value": "@{utcnow()}", "type": "String" }
+                  "rule_id": {
+                    "value": "@{item().rule_id}",
+                    "type": "Int32"
+                  },
+                  "table_name": {
+                    "value": "@{item().table_name}",
+                    "type": "String"
+                  },
+                  "check_type": {
+                    "value": "@{item().check_type}",
+                    "type": "String"
+                  },
+                  "comparison_operator": {
+                    "value": "@{item().comparison_operator}",
+                    "type": "String"
+                  },
+                  "result_value": {
+                    "value": "@{string(activity('RunDQCheck').output.firstRow.result)}",
+                    "type": "String"
+                  },
+                  "threshold": {
+                    "value": "@{item().threshold}",
+                    "type": "String"
+                  },
+                  "severity": {
+                    "value": "@{item().severity}",
+                    "type": "String"
+                  },
+                  "run_timestamp": {
+                    "value": "@{utcnow()}",
+                    "type": "String"
+                  }
                 }
               },
-              "linkedServiceName": { "referenceName": "ls_control_db", "type": "LinkedServiceReference" }
+              "linkedServiceName": {
+                "referenceName": "ls_control_db",
+                "type": "LinkedServiceReference"
+              }
+            },
+            {
+              "name": "LogDQFailure",
+              "type": "SqlServerStoredProcedure",
+              "dependsOn": [
+                {
+                  "activity": "RunDQCheck",
+                  "dependencyConditions": [
+                    "Failed"
+                  ]
+                }
+              ],
+              "typeProperties": {
+                "storedProcedureName": "control.usp_log_dq_failure",
+                "storedProcedureParameters": {
+                  "rule_id": {
+                    "value": "@{item().rule_id}",
+                    "type": "Int32"
+                  },
+                  "table_name": {
+                    "value": "@{item().table_name}",
+                    "type": "String"
+                  },
+                  "check_type": {
+                    "value": "@{item().check_type}",
+                    "type": "String"
+                  },
+                  "comparison_operator": {
+                    "value": "@{item().comparison_operator}",
+                    "type": "String"
+                  },
+                  "threshold": {
+                    "value": "@{item().threshold}",
+                    "type": "String"
+                  },
+                  "severity": {
+                    "value": "@{item().severity}",
+                    "type": "String"
+                  },
+                  "error_message": {
+                    "value": "@{string(activity('RunDQCheck').error.message)}",
+                    "type": "String"
+                  },
+                  "run_timestamp": {
+                    "value": "@{utcnow()}",
+                    "type": "String"
+                  }
+                }
+              },
+              "linkedServiceName": {
+                "referenceName": "ls_control_db",
+                "type": "LinkedServiceReference"
+              }
             }
           ]
         }
       }
     ],
-    "annotations": ["data-quality", "production", "validation"]
+    "annotations": [
+      "data-quality",
+      "template",
+      "validation"
+    ]
   }
 }
